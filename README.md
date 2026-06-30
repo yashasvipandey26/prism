@@ -129,8 +129,8 @@ Opens the TUI with synthetic data so you can try all the controls right away.
 Download any GGUF file. A good small starting point (~2 GB, runs on CPU):
 
 ```bash
-# using huggingface-cli (pip install huggingface_hub)
-huggingface-cli download TheBloke/Llama-2-7B-GGUF llama-2-7b.Q4_K_M.gguf --local-dir .
+# using huggingface-cli (use the command: pip install huggingface_hub)
+hf download TheBloke/Llama-2-7B-GGUF llama-2-7b.Q4_K_M.gguf --local-dir .
 ```
 
 Then run:

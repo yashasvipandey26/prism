@@ -1,140 +1,190 @@
-# PRISM
+# PRISM 🔬
 
-**Local LLM Instrumentation, Tracing, and Replay Platform**
+> **Local LLM Instrumentation, Tracing, and Replay Platform**
 
-PRISM hooks non-invasively into [llama.cpp](https://github.com/ggerganov/llama.cpp)'s inference pipeline via the `ggml_backend_sched_eval_callback` mechanism — no model source changes required. It captures real-time tensor metadata (shape, dtype, activation stats, latency) as tokens flow through the architecture and presents everything in an interactive terminal UI.
+Ever wondered *what actually happens inside a language model* when it processes text? Which layers are slow? Where do the numbers explode? What does the attention pattern for a given sentence look like?
+
+PRISM answers those questions — live, in your terminal, without touching a single line of model code.
+
+---
+
+## What is this?
+
+When a language model runs, it's really just a long chain of mathematical operations — embeddings, attention, feed-forward networks, normalization — stacked dozens of times. These operations are normally a black box.
+
+PRISM **taps into that chain** and records what's happening at every layer: how long each step takes, what the numbers look like, whether anything looks suspicious. It then shows all of this in a live, interactive terminal dashboard.
+
+Think of it like **Chrome DevTools, but for a transformer model running on your machine.**
+
+---
+
+## What does it show?
 
 ```
- PRISM v0.3   [Tab]:Cycle Focus  [Q]:Quit  [j/k]:Navigate  [h/l]:Pan  [+/-]:Contrast
-╭█ 1. MODEL TOPOLOGY──────────────╮╭  2. LIVE PACKET STREAM───────────────────────────╮
-│▼ llama-3-8b (demo)              ││  ID  │ TIMESTAMP    │ LAYER TYPE    │ DEVICE      │
-│  ● token_embd                   ││──────┼──────────────┼───────────────┼─────────────│
-│  ▼ layers                       ││  100 │ 14:22:01.33  │ Embedding     │ CPU         │
-│    ▶ blk.0                      ││  101 │ 14:22:01.33  │ RMSNorm       │ CPU         │
-│    ▼ blk.1  ← [capture target]  ││  102 │ 14:22:01.33  │ Attn (Self)   │ Metal       │
-│      ● blk.1.attn_norm          ││  103 │ 14:22:01.33  │ MLP (SwiGLU)  │ Metal       │
-│      ● blk.1.attn               ││  104 │ 14:22:01.34  │ Attn (Self)   │ Metal       │
-│    ▶ blk.2                      ││  105 │ 14:22:01.34  │ RMSNorm       │ CPU         │
-╰─────────── [j/k] Navigate ──────╯╰──────────────────────────────────────────────────╯
-╭  3. ATTENTION MATRIX (HEAD 0)────────────────────────────────────────────────────────╮
-│          [I]    [want]  [it]    [to]    [be]    [kbrd]                               │
-│ [I]      ██      ··      ··      ··      ··      ··                                  │
-│ [want]   ▓▓      ██      ··      ··      ··      ··                                  │
-│ [it]     ░░      ▒▒      ██      ··      ··      ··                                  │
-│ [to]     ░░      ░░      ▒▒      ██      ··      ··                                  │
-│ HEAD 0/3   [</>]:Head  [hjkl]:Pan  [+/-]:Contrast ×1.0    Viewport [0-7] × [0-7]   │
-╰──────────────────────────────────────────────────────────────────────────────────────╯
-╭  4. RUNTIME METRICS──────────────╮╭  5. ANOMALY LEDGER────────────────────────────╮
-│ Layer  : blk.1.attn              ││ ⚠ 14:22:01.34  Outlier blk.1.attn: Max=6.5>6  │
-│ Type   : Attn (Self)             ││ ✓ no further anomalies                         │
-│ Shape  : [1, 32, 4096]           ││                                                │
-│ DType  : float16                 ││                                                │
-│ Mean   : 0.0312   Max : 6.5000   ││                                                │
-│ Sparse : ████████████░░  49%     ││                                                │
-│ Latency: 1.190 ms                ││                                                │
-╰──────────────────────────────────╯╰────────────────────────────────────────────────╯
+ PRISM v0.3  [Tab]:Cycle Focus  [Q]:Quit                    Focus: TOPOLOGY  Packets: 12
+╭█ 1. MODEL TOPOLOGY──────────────╮╭  2. LIVE PACKET STREAM──────────────────────────────╮
+│▼ llama-3-8b                     ││  ID  │ TIMESTAMP    │ LAYER TYPE    │ DEVICE         │
+│  ● token_embd                   ││──────┼──────────────┼───────────────┼────────────────│
+│  ▼ layers                       ││  100 │ 14:22:01.33  │ Embedding     │ CPU            │
+│    ▶ blk.0                      ││  101 │ 14:22:01.33  │ RMSNorm       │ CPU            │
+│    ▼ blk.1                      ││  102 │ 14:22:01.33  │ Attn (Self)   │ Metal          │
+│      ● blk.1.attn_norm          ││  103 │ 14:22:01.34  │ MLP (SwiGLU)  │ Metal          │
+│      ● blk.1.attn  ◀ captured   ││  104 │ 14:22:01.34  │ Attn (Self)   │ Metal          │
+│    ▶ blk.2                      ││  105 │ 14:22:01.34  │ RMSNorm       │ CPU            │
+╰────────── [j/k] Navigate ───────╯╰─────────────────────────────────────────────────────╯
+╭  3. ATTENTION MATRIX (HEAD 0)────────────────────────────────────────────────────────────╮
+│           [I]     [want]   [it]    [to]    [be]    [kbrd]                                │
+│  [I]      ██       ··       ··      ··      ··       ··                                  │
+│  [want]   ▓▓       ██       ··      ··      ··       ··                                  │
+│  [it]     ░░       ▒▒       ██      ··      ··       ··                                  │
+│  [to]     ░░       ░░       ▒▒      ██      ··       ··                                  │
+│  HEAD 0/3    [</>]:Head   [hjkl]:Pan   [+/-]:Contrast ×1.0      Viewport [0-7]×[0-7]   │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+╭  4. RUNTIME METRICS──────────────╮╭  5. ANOMALY LEDGER──────────────────────────────────╮
+│ Layer  : blk.1.attn              ││ ⚠ 14:22:01.34  Outlier blk.1.attn: Max=6.5 > 6.0   │
+│ Shape  : [1, 32, 4096]           ││ ✓ no further anomalies detected                     │
+│ DType  : float16                 ││                                                     │
+│ Mean   : 0.0312   Max : 6.5000   ││                                                     │
+│ Sparse : ████████████░░  49%     ││                                                     │
+│ Latency: 1.190 ms                ││                                                     │
+╰──────────────────────────────────╯╰─────────────────────────────────────────────────────╯
 ```
+
+---
+
+## Five panels, one glance
+
+| Panel | What it tells you |
+|---|---|
+| **Model Topology** | The full layer tree of the model — expand/collapse blocks, navigate with `j/k` |
+| **Live Packet Stream** | Every tensor that was intercepted, timestamped, with its layer type and device |
+| **Attention Matrix** | Heatmap of which tokens attend to which — scroll across heads, pan, adjust contrast |
+| **Runtime Metrics** | Shape, data type, mean/max/min, sparsity bar, and latency for the selected layer |
+| **Anomaly Ledger** | Auto-flagged warnings: activation values that are unusually large, unexpected CPU fallbacks |
+
+---
+
+## How does it work?
+
+llama.cpp (the C++ inference engine this is built on) provides a hook called `cb_eval` — a callback function it calls **before and after computing every tensor** in the model's computation graph. We register our own function there.
+
+That's the entire trick. No model modification. No wrapping. No forking. Just:
+
+```
+model runs → our callback fires for each tensor → we record what we see → TUI displays it
+```
+
+The callback measures the time between "before" and "after" for each tensor (that's the latency), reads the tensor's shape and data type, computes mean/max/min/sparsity on the raw numbers, and pushes everything into a **ring buffer** that holds the last 256 captures. The TUI reads from that ring buffer at 10 times per second and redraws.
+
+For the attention matrix, we intercept the specific tensor named `KQ_soft_max` — this is the softmax output of the query×key product, which is exactly the attention weight matrix that tells you "how much does token A look at token B."
 
 ---
 
 ## Features
 
-- **Non-invasive hook** — registers `ggml_eval_cb` in `llama_context_params`; zero changes to model code
-- **Per-tensor telemetry** — layer name, type, compute device, latency (μs), shape, dtype, mean/max/min, sparsity
-- **Anomaly detection** — flags activations where `|max| > 6.0` or unexpected CPU fallbacks
-- **Attention matrix visualiser** — block-character heatmap with pan, head cycling, and contrast control
-- **Fixed-size ring buffer** — stores up to 256 packets; oldest entry silently overwritten when full, keeping RAM bounded
-- **Trace save / replay** — export a capture to a human-readable `.prism` file; replay later without a model
-- **Interactive TUI** — five panels, vim-style keybindings, 10 Hz live refresh
-
----
-
-## Requirements
-
-| Dependency | Fetched automatically via CMake `FetchContent` |
-|---|---|
-| [llama.cpp](https://github.com/ggerganov/llama.cpp) | Inference backend + Metal/BLAS backends |
-| [FTXUI v5](https://github.com/ArthurSonzogni/FTXUI) | Terminal UI framework |
-
-**Toolchain:** C++17, CMake ≥ 3.16, Apple Clang / GCC / MSVC
-
-**macOS:** Metal GPU backend is detected and enabled automatically.  
-**Linux:** BLAS / CUDA backends follow the same llama.cpp CMake flags.
+- **Zero model modification** — hooks in via a single callback registration, works with any GGUF model
+- **Live latency profiling** — see which layers dominate compute time as inference runs
+- **Attention visualization** — block-character heatmap with per-head navigation and contrast control
+- **Sparsity tracking** — see what fraction of activations are near-zero (useful for understanding model behavior)
+- **Anomaly detection** — automatically flags activation values above a threshold or layers that fall back to CPU unexpectedly  
+- **Bounded memory** — ring buffer caps RAM usage regardless of how long inference runs
+- **Trace save/replay** — export a full capture to a `.prism` file; replay it in the TUI later without needing the model
+- **Works without a model** — demo mode seeds the TUI with synthetic data so you can explore immediately
 
 ---
 
 ## Build
+
+**Requirements:** C++17, CMake ≥ 3.16, a C compiler. Everything else is downloaded automatically.
 
 ```bash
 git clone https://github.com/<your-handle>/prism.git
 cd prism
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel         # first build downloads + compiles llama.cpp (~3 min)
-
-./build/prism --help
+cmake --build build --parallel
 ```
 
-> **Tip:** subsequent builds are incremental and take only a few seconds.
+The first build downloads and compiles llama.cpp and FTXUI — expect about 3–5 minutes. Subsequent builds are incremental and take seconds.
+
+On **macOS Apple Silicon**, Metal GPU acceleration is detected and enabled automatically.  
+On **Linux**, CPU + BLAS backends are used by default; CUDA can be enabled via llama.cpp's standard cmake flags.
 
 ---
 
-## Usage
+## Running
 
-### Demo mode (no model required)
+### Just explore (no model needed)
+
 ```bash
 ./build/prism
 ```
-Seeds the TUI with synthetic telemetry so you can explore all five panels immediately.
 
-### Live inference
-```bash
-./build/prism path/to/model.gguf "The quick brown fox"
-```
-Runs a single forward pass with the hook active. Captured packets appear in the TUI in real time.
-
-Download any GGUF model from [HuggingFace](https://huggingface.co/models?library=gguf), for example:
-```bash
-# ~2 GB, runs on CPU or Apple Silicon
-huggingface-cli download TheBloke/Llama-2-7B-GGUF llama-2-7b.Q4_K_M.gguf
-./build/prism llama-2-7b.Q4_K_M.gguf "Explain transformers in one sentence"
-```
-
-### Save a trace
-```bash
-./build/prism model.gguf "my prompt" --save capture.prism
-```
-Saves every captured packet and anomaly to `capture.prism` after inference completes.
-
-### Replay a trace
-```bash
-./build/prism --replay capture.prism
-```
-Loads the trace into the TUI — no model file needed. Useful for sharing captures or post-hoc analysis.
+Opens the TUI with synthetic data so you can try all the controls right away.
 
 ---
 
-## TUI Keybindings
+### With a real model
 
-| Key | Action |
-|-----|--------|
-| `Tab` / `Shift+Tab` | Cycle focus forward / backward between panels |
-| `j` / `k` | Navigate topology tree / scroll packet stream |
-| `Space` | Expand or collapse a topology node |
-| `h` `j` `k` `l` | Pan the attention matrix |
-| `<` / `>` | Previous / next attention head |
-| `+` / `-` | Increase / decrease attention contrast |
+Download any GGUF file. A good small starting point (~2 GB, runs on CPU):
+
+```bash
+# using huggingface-cli (pip install huggingface_hub)
+huggingface-cli download TheBloke/Llama-2-7B-GGUF llama-2-7b.Q4_K_M.gguf --local-dir .
+```
+
+Then run:
+
+```bash
+./build/prism llama-2-7b.Q4_K_M.gguf "Explain attention in transformers"
+```
+
+The model runs a single forward pass. Every tensor fired during that pass is captured and shown in the TUI.
+
+---
+
+### Save a trace
+
+```bash
+./build/prism model.gguf "my prompt" --save my_run.prism
+```
+
+After inference finishes, the full capture is written to `my_run.prism`.
+
+---
+
+### Replay a saved trace
+
+```bash
+./build/prism --replay my_run.prism
+```
+
+Loads the trace and opens the TUI — **no model file needed**. Useful for sharing captures with teammates or reviewing a run later.
+
+---
+
+## Keybindings
+
+| Key | What it does |
+|-----|-------------|
+| `Tab` | Move focus to the next panel |
+| `Shift+Tab` | Move focus to the previous panel |
+| `j` / `k` | Move cursor down/up in topology; scroll packet stream |
+| `Space` | Expand or collapse a node in the topology tree |
+| `h` `j` `k` `l` | Pan the attention matrix left/down/up/right |
+| `<` / `>` | Switch to previous/next attention head |
+| `+` / `-` | Increase/decrease attention contrast |
 | `Q` | Quit |
 
 ---
 
-## Trace File Format
+## Trace file format
 
-`.prism` files are plain text and human-readable:
+`.prism` files are plain text — you can open them in any editor:
 
 ```
 PRISM_TRACE v1
-META model=llama-3-8b
+META model=llama-2-7b
 META saved_at=1782814202027848
 
 PKT 100 1782814202027379 1 2 1.142 | blk.0.attn | [1,32,4096] | float16 | 0.031 3.2 -2.9 0.54
@@ -142,70 +192,17 @@ PKT 101 1782814202027415 2 2 0.871 | blk.0.ffn_out | [1,32,4096] | float16 | 0.0
 ANO 1782814202027415 0 | Outlier Feature blk.1.attn: Max = 6.5 > 6.0
 ```
 
-Fields: `PKT <id> <timestamp_µs> <layer_type> <device> <latency_ms> | <name> | <shape> | <dtype> | <mean> <max> <min> <sparsity>`
+Each `PKT` line is one tensor capture: id, timestamp, layer type, device, latency, name, shape, dtype, and activation stats. Each `ANO` line is a flagged anomaly.
 
 ---
 
-## Architecture
+## Tech stack
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    llama.cpp inference                  │
-│   llama_context_params.cb_eval = ModelHook::ggml_eval_cb│
-└───────────────────────┬─────────────────────────────────┘
-                        │ ask=true  (before tensor)
-                        │ ask=false (after tensor, data valid)
-                        ▼
-┌─────────────────────────────────────────────────────────┐
-│                      ModelHook                          │
-│  ┌─────────────────┐  ┌──────────────────────────────┐  │
-│  │ should_capture()│  │ on_tensor_after()            │  │
-│  │ filter by name  │  │  measure latency             │  │
-│  │ pattern         │  │  compute stats (CPU tensors) │  │
-│  └────────┬────────┘  │  detect anomalies            │  │
-│           │           │  capture KQ_soft_max → attn  │  │
-│           └───────────┴──────────────┬───────────────┘  │
-│                                      │                  │
-│         RingBuffer<TelemetryPacket, 256>                │
-│         RingBuffer<AnomalyRecord,    64>                │
-└──────────────────────────────────────┬──────────────────┘
-                                       │ thread-safe reads
-                        ┌──────────────▼──────────────┐
-                        │           TuiApp             │
-                        │  Panel 1: Model Topology     │
-                        │  Panel 2: Live Packet Stream │
-                        │  Panel 3: Attention Matrix   │
-                        │  Panel 4: Runtime Metrics    │
-                        │  Panel 5: Anomaly Ledger     │
-                        └──────────────────────────────┘
-                                       │
-                        ┌──────────────▼──────────────┐
-                        │       prism_trace::save()   │
-                        │       prism_trace::load()   │
-                        │       .prism trace file     │
-                        └─────────────────────────────┘
-```
-
----
-
-## Project Structure
-
-```
-prism/
-├── CMakeLists.txt
-├── include/
-│   ├── core/
-│   │   ├── ring_buffer.h     Thread-safe fixed-capacity ring buffer
-│   │   ├── telemetry.h       TelemetryPacket, AnomalyRecord, ModelNode
-│   │   ├── hook.h            ModelHook — ggml eval callback interface
-│   │   └── trace_io.h        Trace save / load declarations
-│   └── tui/
-│       └── app.h             TuiApp — FTXUI-based interactive interface
-└── src/
-    ├── main.cpp              Entry point, argument parsing, inference thread
-    ├── core/
-    │   ├── hook.cpp          Capture filter, stat computation, anomaly detection
-    │   └── trace_io.cpp      .prism serialisation / deserialisation
-    └── tui/
-        └── app.cpp           Five-panel TUI renderer and event handler
-```
+| Component | Technology |
+|---|---|
+| Inference engine | [llama.cpp](https://github.com/ggerganov/llama.cpp) — runs GGUF models on CPU/Metal/CUDA |
+| Hook mechanism | `ggml_backend_sched_eval_callback` in `llama_context_params` |
+| Terminal UI | [FTXUI v5](https://github.com/ArthurSonzogni/FTXUI) — declarative C++ TUI framework |
+| Ring buffer | Custom lock-free-read, mutex-write template (`RingBuffer<T, N>`) |
+| Language | C++17 |
+| Build system | CMake with FetchContent for dependencies |

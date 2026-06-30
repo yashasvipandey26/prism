@@ -1,73 +1,59 @@
 #include "core/hook.h"
-#include "core/ring_buffer.h"
-#include "core/telemetry.h"
+#include "tui/app.h"
 
 #include <llama.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
-// ── Formatting helpers ────────────────────────────────────────────────────────
+// ── Synthetic seed (no model needed) ─────────────────────────────────────────
 
-static std::string fmt_time(std::chrono::system_clock::time_point tp) {
-    auto t  = std::chrono::system_clock::to_time_t(tp);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                  tp.time_since_epoch()) % 1000;
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%H:%M:%S", std::localtime(&t));
-    return std::string(buf) + "." + std::to_string(ms.count() / 10);
-}
-
-static void print_divider(char c = '-', int w = 72) {
-    std::cout << std::string(w, c) << "\n";
-}
-
-// ── Synthetic smoke-test (no model file required) ─────────────────────────────
-
-static void run_synthetic_test() {
-    std::cout << "\n[Synthetic mode — no model path given]\n\n";
-
-    ModelHook hook;
-
-    // Build a fake topology
+static void seed_synthetic(ModelHook& hook) {
     ModelNode root;
-    root.name = "llama-3-8b (synthetic)";
+    root.name     = "llama-3-8b (demo)";
     root.expanded = true;
 
-    for (const char* name : {"token_embd", "blk.0.attn", "blk.0.ffn_out",
-                              "blk.1.attn", "blk.1.ffn_out", "output_norm", "output"}) {
-        ModelNode n;
-        n.name = name;
-        if      (std::strstr(name, "embd"))   n.type = LayerType::Embedding;
-        else if (std::strstr(name, "attn"))   n.type = LayerType::Attention;
-        else if (std::strstr(name, "ffn"))    n.type = LayerType::MLP;
-        else if (std::strstr(name, "norm"))   n.type = LayerType::RMSNorm;
-        else if (std::strstr(name, "output")) n.type = LayerType::Output;
-        root.children.push_back(n);
+    auto make_leaf = [](const std::string& name, LayerType t, bool cap = false) {
+        ModelNode n; n.name = name; n.type = t; n.is_capture_target = cap;
+        return n;
+    };
+
+    root.children.push_back(make_leaf("token_embd", LayerType::Embedding));
+
+    ModelNode grp; grp.name = "layers"; grp.expanded = true;
+    for (int i = 0; i < 4; ++i) {
+        ModelNode blk;
+        blk.name = "blk." + std::to_string(i);
+        blk.children.push_back(make_leaf(blk.name + ".attn_norm", LayerType::RMSNorm));
+        blk.children.push_back(make_leaf(blk.name + ".attn", LayerType::Attention, i == 1));
+        blk.children.push_back(make_leaf(blk.name + ".ffn_norm", LayerType::RMSNorm));
+        blk.children.push_back(make_leaf(blk.name + ".ffn_out",  LayerType::MLP));
+        grp.children.push_back(blk);
     }
+    root.children.push_back(grp);
+    root.children.push_back(make_leaf("output_norm", LayerType::RMSNorm));
+    root.children.push_back(make_leaf("output",      LayerType::Output));
     hook.set_topology(std::move(root));
 
-    // Simulate what the eval callback would produce
-    const struct {
-        const char* name;
-        LayerType   type;
-        double      lat_ms;
-        float       max_val;
-    } sim[] = {
-        { "token_embd",     LayerType::Embedding, 0.21, 1.3f },
-        { "blk.0.attn_norm",LayerType::RMSNorm,   0.02, 0.9f },
-        { "blk.0.attn",     LayerType::Attention, 1.14, 3.2f },
-        { "blk.0.ffn_norm", LayerType::RMSNorm,   0.02, 0.8f },
-        { "blk.0.ffn_out",  LayerType::MLP,       0.87, 5.1f },
-        { "blk.1.attn_norm",LayerType::RMSNorm,   0.02, 0.9f },
-        { "blk.1.attn",     LayerType::Attention, 1.19, 6.5f },  // triggers anomaly
-        { "blk.1.ffn_norm", LayerType::RMSNorm,   0.02, 0.7f },
-        { "blk.1.ffn_out",  LayerType::MLP,       0.91, 4.8f },
-        { "output_norm",    LayerType::RMSNorm,   0.03, 1.1f },
+    // Synthetic packets
+    const struct { const char* name; LayerType type; double lat; float mx; float sp; } sim[] = {
+        { "token_embd",      LayerType::Embedding, 0.21, 1.3f, 0.12f },
+        { "blk.0.attn_norm", LayerType::RMSNorm,   0.02, 0.9f, 0.00f },
+        { "blk.0.attn",      LayerType::Attention,  1.14, 3.2f, 0.54f },
+        { "blk.0.ffn_norm",  LayerType::RMSNorm,   0.02, 0.8f, 0.00f },
+        { "blk.0.ffn_out",   LayerType::MLP,        0.87, 5.1f, 0.61f },
+        { "blk.1.attn_norm", LayerType::RMSNorm,   0.02, 0.9f, 0.00f },
+        { "blk.1.attn",      LayerType::Attention,  1.19, 6.5f, 0.49f },  // anomaly
+        { "blk.1.ffn_norm",  LayerType::RMSNorm,   0.02, 0.7f, 0.00f },
+        { "blk.1.ffn_out",   LayerType::MLP,        0.91, 4.8f, 0.58f },
+        { "blk.2.attn",      LayerType::Attention,  1.22, 2.9f, 0.51f },
+        { "blk.2.ffn_out",   LayerType::MLP,        0.89, 4.3f, 0.60f },
+        { "output_norm",     LayerType::RMSNorm,   0.03, 1.1f, 0.00f },
     };
 
     for (size_t i = 0; i < std::size(sim); ++i) {
@@ -77,84 +63,43 @@ static void run_synthetic_test() {
         pkt.layer_name   = sim[i].name;
         pkt.layer_type   = sim[i].type;
         pkt.device       = ComputeDevice::CPU;
-        pkt.latency_ms   = sim[i].lat_ms;
+        pkt.latency_ms   = sim[i].lat;
         pkt.tensor_stats.shape   = {1, 32, 4096};
         pkt.tensor_stats.dtype   = "float16";
-        pkt.tensor_stats.mean    = 0.03f;
-        pkt.tensor_stats.max_val = sim[i].max_val;
-        pkt.tensor_stats.sparsity = 0.54f;
-
+        pkt.tensor_stats.mean    = 0.031f;
+        pkt.tensor_stats.max_val = sim[i].mx;
+        pkt.tensor_stats.min_val = -sim[i].mx * 0.9f;
+        pkt.tensor_stats.sparsity = sim[i].sp;
         hook.packets().push(pkt);
 
-        if (sim[i].max_val > 6.0f) {
+        if (sim[i].mx > 6.0f) {
             hook.anomalies().push({
                 pkt.timestamp,
-                "Outlier Feature " + pkt.layer_name + ": Max = " +
-                    std::to_string(sim[i].max_val) + " > 6.0",
+                "Outlier Feature " + pkt.layer_name +
+                    ": Max = " + std::to_string(sim[i].mx) + " > 6.0",
                 false
             });
         }
     }
-
-    // ── Print live stream ─────────────────────────────────────────────────────
-    std::cout << std::left
-              << std::setw(5)  << "ID"
-              << std::setw(14) << "TIMESTAMP"
-              << std::setw(18) << "LAYER TYPE"
-              << std::setw(24) << "LAYER NAME"
-              << "LATENCY\n";
-    print_divider();
-
-    hook.packets().for_each([](const TelemetryPacket& p) {
-        std::cout << std::left
-                  << std::setw(5)  << p.id
-                  << std::setw(14) << fmt_time(p.timestamp)
-                  << std::setw(18) << layer_type_str(p.layer_type)
-                  << std::setw(24) << p.layer_name
-                  << std::fixed << std::setprecision(3) << p.latency_ms << " ms\n";
-    });
-
-    // ── Print anomalies ───────────────────────────────────────────────────────
-    std::cout << "\nANOMALY LEDGER (" << hook.anomalies().size() << " record(s)):\n";
-    print_divider();
-    hook.anomalies().for_each([](const AnomalyRecord& a) {
-        std::cout << (a.is_error ? "[ERR] " : "[WRN] ")
-                  << fmt_time(a.timestamp) << "  " << a.message << "\n";
-    });
-
-    std::cout << "\nTopology root: " << hook.topology().name
-              << "  (" << hook.topology().children.size() << " children)\n";
 }
 
-// ── Real model inference ──────────────────────────────────────────────────────
+// ── Real model inference (background thread) ──────────────────────────────────
 
-static void run_with_model(const char* model_path, const char* prompt) {
-    std::cout << "\n[Model: " << model_path << "]\n";
-    std::cout << "[Prompt: \"" << prompt << "\"]\n\n";
-
-    // ── Backend init ──────────────────────────────────────────────────────────
+static void run_model(ModelHook& hook, const char* model_path, const char* prompt) {
     llama_backend_init();
 
-    // ── Load model ────────────────────────────────────────────────────────────
     llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 99;  // offload all layers to GPU if available
+    mparams.n_gpu_layers = 99;
 
     llama_model* model = llama_model_load_from_file(model_path, mparams);
     if (!model) {
-        std::cerr << "ERROR: failed to load model from " << model_path << "\n";
+        std::cerr << "[prism] ERROR: cannot load model " << model_path << "\n";
         llama_backend_free();
         return;
     }
 
-    // ── Build topology before attaching hook ──────────────────────────────────
-    ModelHook hook;
     hook.set_topology(ModelHook::build_topology(model));
 
-    std::cout << "Model loaded: " << hook.topology().name << "\n";
-    std::cout << "Layers      : " << llama_model_n_layer(model) << "\n";
-    std::cout << "Embedding   : " << llama_model_n_embd(model) << "\n\n";
-
-    // ── Create context with hook callback ─────────────────────────────────────
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx             = 512;
     cparams.cb_eval           = ModelHook::ggml_eval_cb;
@@ -162,69 +107,22 @@ static void run_with_model(const char* model_path, const char* prompt) {
 
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
-        std::cerr << "ERROR: failed to create llama context\n";
         llama_model_free(model);
         llama_backend_free();
         return;
     }
 
-    // ── Tokenise ──────────────────────────────────────────────────────────────
     const llama_vocab* vocab = llama_model_get_vocab(model);
+    int n = -llama_tokenize(vocab, prompt, (int)std::strlen(prompt),
+                            nullptr, 0, true, true);
+    std::vector<llama_token> tokens(n);
+    llama_tokenize(vocab, prompt, (int)std::strlen(prompt),
+                   tokens.data(), n, true, true);
 
-    const int n_prompt = -llama_tokenize(vocab, prompt, (int)std::strlen(prompt),
-                                         nullptr, 0, true, true);
-    std::vector<llama_token> tokens(n_prompt);
-    if (llama_tokenize(vocab, prompt, (int)std::strlen(prompt),
-                       tokens.data(), n_prompt, true, true) < 0) {
-        std::cerr << "ERROR: tokenisation failed\n";
-        llama_free(ctx);
-        llama_model_free(model);
-        llama_backend_free();
-        return;
-    }
+    llama_batch batch = llama_batch_get_one(tokens.data(), n);
+    if (llama_decode(ctx, batch) != 0)
+        std::cerr << "[prism] WARNING: llama_decode returned error\n";
 
-    std::cout << "Prompt tokens: " << n_prompt << "\n";
-    std::cout << "Running forward pass (hook active)...\n\n";
-
-    // ── Forward pass (one decode call — we want activations, not output tokens) ─
-    llama_batch batch = llama_batch_get_one(tokens.data(), (int)tokens.size());
-    if (llama_decode(ctx, batch) != 0) {
-        std::cerr << "ERROR: llama_decode failed\n";
-    }
-
-    // ── Print captured telemetry ──────────────────────────────────────────────
-    std::cout << "Packets captured: " << hook.packets().size() << "\n\n";
-
-    std::cout << std::left
-              << std::setw(5)  << "ID"
-              << std::setw(14) << "TIMESTAMP"
-              << std::setw(18) << "LAYER TYPE"
-              << std::setw(8)  << "DEV"
-              << std::setw(28) << "LAYER NAME"
-              << "LATENCY\n";
-    print_divider();
-
-    hook.packets().for_each([](const TelemetryPacket& p) {
-        std::cout << std::left
-                  << std::setw(5)  << p.id
-                  << std::setw(14) << fmt_time(p.timestamp)
-                  << std::setw(18) << layer_type_str(p.layer_type)
-                  << std::setw(8)  << device_str(p.device)
-                  << std::setw(28) << p.layer_name
-                  << std::fixed << std::setprecision(3) << p.latency_ms << " ms\n";
-    });
-
-    // ── Anomalies ─────────────────────────────────────────────────────────────
-    if (hook.anomalies().size() > 0) {
-        std::cout << "\nANOMALY LEDGER (" << hook.anomalies().size() << " record(s)):\n";
-        print_divider();
-        hook.anomalies().for_each([](const AnomalyRecord& a) {
-            std::cout << (a.is_error ? "[ERR] " : "[WRN] ")
-                      << fmt_time(a.timestamp) << "  " << a.message << "\n";
-        });
-    }
-
-    // ── Cleanup ───────────────────────────────────────────────────────────────
     llama_free(ctx);
     llama_model_free(model);
     llama_backend_free();
@@ -233,15 +131,31 @@ static void run_with_model(const char* model_path, const char* prompt) {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
-    std::cout << "PRISM - LLM Telemetry Platform v0.2\n";
-    print_divider('=');
+    ModelHook hook;
+
+    std::atomic<bool> inf_done{false};
+    std::thread       inf_thread;
 
     if (argc >= 2) {
-        const char* prompt = (argc >= 3) ? argv[2] : "Hello, world!";
-        run_with_model(argv[1], prompt);
+        const char* prompt = (argc >= 3) ? argv[2] : "The quick brown fox jumps";
+        // Run inference in background; TUI starts immediately and shows live data
+        inf_thread = std::thread([&, prompt]() {
+            run_model(hook, argv[1], prompt);
+            inf_done = true;
+        });
     } else {
-        run_synthetic_test();
+        seed_synthetic(hook);
+        inf_done = true;
     }
+
+    // Brief pause so background thread can set topology before TUI builds tree
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+
+    TuiApp app(hook);
+    app.run();
+
+    inf_done = true;
+    if (inf_thread.joinable()) inf_thread.join();
 
     return 0;
 }

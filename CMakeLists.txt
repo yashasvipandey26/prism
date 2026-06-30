@@ -20,14 +20,31 @@ set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(llama_cpp)
 
+# ── FTXUI ────────────────────────────────────────────────────────────────────
+FetchContent_Declare(
+    ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+    GIT_TAG        v5.0.0
+    GIT_SHALLOW    TRUE
+)
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(ftxui)
+
 # ── prism executable ─────────────────────────────────────────────────────────
 add_executable(prism
     src/main.cpp
     src/core/hook.cpp
+    src/tui/app.cpp
 )
 
 target_include_directories(prism PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(prism PRIVATE llama)
+target_link_libraries(prism PRIVATE
+    llama
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+)

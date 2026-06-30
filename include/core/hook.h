@@ -47,8 +47,10 @@ public:
     static ModelNode build_topology(const struct llama_model* model);
 
     // ── Data access (read by TUI) ─────────────────────────────────────────────
-    RingBuffer<TelemetryPacket, PACKET_BUF_CAP>&  packets()   { return packets_;   }
-    RingBuffer<AnomalyRecord,   ANOMALY_BUF_CAP>& anomalies() { return anomalies_; }
+    RingBuffer<TelemetryPacket, PACKET_BUF_CAP>&        packets()         { return packets_;   }
+    const RingBuffer<TelemetryPacket, PACKET_BUF_CAP>& packets()   const { return packets_;   }
+    RingBuffer<AnomalyRecord,   ANOMALY_BUF_CAP>&       anomalies()       { return anomalies_; }
+    const RingBuffer<AnomalyRecord,   ANOMALY_BUF_CAP>& anomalies() const { return anomalies_; }
 
     void             set_topology(ModelNode n) { topology_ = std::move(n); }
     const ModelNode& topology() const          { return topology_; }

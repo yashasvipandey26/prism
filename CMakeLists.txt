@@ -35,6 +35,7 @@ FetchContent_MakeAvailable(ftxui)
 add_executable(prism
     src/main.cpp
     src/core/hook.cpp
+    src/core/trace_io.cpp
     src/tui/app.cpp
 )
 

@@ -1,18 +1,33 @@
 cmake_minimum_required(VERSION 3.16)
-project(prism VERSION 0.1.0 LANGUAGES CXX)
+project(prism VERSION 0.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+include(FetchContent)
+
+# ── llama.cpp ─────────────────────────────────────────────────────────────────
+FetchContent_Declare(
+    llama_cpp
+    GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(llama_cpp)
+
+# ── prism executable ─────────────────────────────────────────────────────────
 add_executable(prism
     src/main.cpp
+    src/core/hook.cpp
 )
 
 target_include_directories(prism PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-if(UNIX AND NOT APPLE)
-    target_link_libraries(prism PRIVATE pthread)
-endif()
+target_link_libraries(prism PRIVATE llama)

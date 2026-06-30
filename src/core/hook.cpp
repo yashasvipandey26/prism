@@ -44,6 +44,7 @@ bool ModelHook::should_capture(const char* name) const {
         "token_embd",   // embedding lookup
         "inp_embd",     // input embedding
         "output_norm",  // final layer norm
+        "KQ_soft_max",  // attention weight matrix (for visualization)
         "blk.",         // catch-all for block intermediate tensors
         nullptr
     };
@@ -61,7 +62,58 @@ void ModelHook::on_tensor_before(const char* name) {
 
 // ── After tensor (ask=false path) ─────────────────────────────────────────────
 
+void ModelHook::capture_attention(struct ggml_tensor* t) {
+    // Only capture CPU-resident float tensors (Metal/CUDA require device readback).
+    if (!t->data) return;
+    if (t->buffer) {
+        auto buft = ggml_backend_buffer_get_type(t->buffer);
+        if (buft) {
+            const char* bn = ggml_backend_buft_name(buft);
+            if (bn && (std::strstr(bn, "CUDA") || std::strstr(bn, "Metal"))) return;
+        }
+    }
+
+    // ggml layout: ne[0]=n_kv (fastest), ne[1]=n_queries, ne[2]=n_heads
+    const int n_kv      = (int)t->ne[0];
+    const int n_queries = (int)t->ne[1];
+    const int n_heads   = (int)(ggml_n_dims(t) > 2 ? t->ne[2] : 1);
+
+    if (n_kv <= 0 || n_queries <= 0 || n_kv > 512 || n_queries > 512) return;
+    if (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16) return;
+
+    AttentionMatrix m;
+    m.num_heads = n_heads;
+    m.seq_len   = n_kv;
+    m.weights.assign(n_heads * n_queries * n_kv, 0.0f);
+
+    if (t->type == GGML_TYPE_F32) {
+        const float* d = static_cast<const float*>(t->data);
+        for (int h = 0; h < n_heads; ++h)
+            for (int q = 0; q < n_queries; ++q)
+                for (int k = 0; k < n_kv; ++k)
+                    m.weights[h * n_kv * n_queries + q * n_kv + k] =
+                        d[h * n_queries * n_kv + q * n_kv + k];
+    } else {
+        const ggml_fp16_t* d = static_cast<const ggml_fp16_t*>(t->data);
+        for (int h = 0; h < n_heads; ++h)
+            for (int q = 0; q < n_queries; ++q)
+                for (int k = 0; k < n_kv; ++k)
+                    m.weights[h * n_kv * n_queries + q * n_kv + k] =
+                        ggml_fp16_to_fp32(d[h * n_queries * n_kv + q * n_kv + k]);
+    }
+
+    std::lock_guard<std::mutex> lk(attn_mu_);
+    real_attn_    = std::move(m);
+    has_real_attn_ = true;
+}
+
 void ModelHook::on_tensor_after(struct ggml_tensor* t) {
+    // Route attention tensors to the visualizer, not the packet stream.
+    if (name_has(t->name, "KQ_soft_max")) {
+        capture_attention(t);
+        return;
+    }
+
     auto now = std::chrono::high_resolution_clock::now();
 
     double latency_ms = 0.0;

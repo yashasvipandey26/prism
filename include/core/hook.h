@@ -53,11 +53,20 @@ public:
     void             set_topology(ModelNode n) { topology_ = std::move(n); }
     const ModelNode& topology() const          { return topology_; }
 
+    // ── Real attention access ─────────────────────────────────────────────────
+    // Populated from the KQ_soft_max tensor captured during forward pass.
+    bool            has_real_attention() const { return has_real_attn_.load(); }
+    AttentionMatrix copy_attention() const {
+        std::lock_guard<std::mutex> lk(attn_mu_);
+        return real_attn_;
+    }
+
 private:
     // Internal dispatch
     bool should_capture(const char* name) const;
     void on_tensor_before(const char* name);
     void on_tensor_after(struct ggml_tensor* t);
+    void capture_attention(struct ggml_tensor* t);
 
     // Helpers
     static LayerType    classify(const char* name);
@@ -75,6 +84,11 @@ private:
     // Tensor-name → start-time, to derive latency between ask=true and ask=false
     std::unordered_map<std::string, std::chrono::high_resolution_clock::time_point> timers_;
     std::mutex timer_mu_;
+
+    // Captured attention matrix (latest KQ softmax from any layer)
+    AttentionMatrix    real_attn_;
+    std::atomic<bool>  has_real_attn_{false};
+    mutable std::mutex attn_mu_;
 
     static constexpr float kSparsityEps       = 1e-6f;
     static constexpr float kAnomalyMaxThresh  = 6.0f;

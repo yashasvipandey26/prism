@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 // A flattened entry from the ModelNode tree used by the topology panel.
@@ -31,8 +32,9 @@ private:
     int focus_ = 0;
 
     // Topology panel
-    int                  topo_cursor_ = 0;
-    std::vector<FlatNode> flat_;
+    int                           topo_cursor_ = 0;
+    std::vector<FlatNode>         flat_;
+    std::unordered_set<std::string> collapsed_;  // node names that are collapsed
 
     // Attention panel
     int   attn_head_     = 0;

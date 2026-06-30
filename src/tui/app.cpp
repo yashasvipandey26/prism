@@ -75,6 +75,13 @@ TuiApp::TuiApp(ModelHook& hook) : hook_(hook) {
         }
     }
     synth_tokens_ = {"[I]", "[want]", "[it]", "[to]", "[be]", "[kbrd]", "[driv]", "[EOS]"};
+
+    // Collapse blk.N nodes by default so the tree isn't overwhelming
+    for (const auto& fn : flat_) {
+        if (fn.has_children && fn.depth >= 2)
+            collapsed_.insert(fn.full_name);
+    }
+    rebuild_tree();
 }
 
 // ── Tree flattening ───────────────────────────────────────────────────────────
@@ -87,6 +94,8 @@ void TuiApp::flatten_node(const ModelNode& node, int depth) {
     fn.has_children      = !node.children.empty();
     fn.is_capture_target = node.is_capture_target;
     flat_.push_back(fn);
+    // Don't recurse into collapsed nodes
+    if (collapsed_.count(node.name)) return;
     for (const auto& child : node.children)
         flatten_node(child, depth + 1);
 }
@@ -107,7 +116,8 @@ Element TuiApp::render_topology() {
     for (int i = 0; i < (int)flat_.size(); ++i) {
         const auto& fn = flat_[i];
         std::string pad(fn.depth * 2, ' ');
-        std::string bullet = fn.has_children ? "▼ " : "● ";
+        bool is_collapsed = collapsed_.count(fn.full_name) > 0;
+        std::string bullet = fn.has_children ? (is_collapsed ? "▶ " : "▼ ") : "● ";
         std::string label  = pad + bullet + fn.full_name;
 
         Color c = Color::White;
@@ -198,12 +208,15 @@ Element TuiApp::render_stream() {
 // ── 3. Attention Matrix ───────────────────────────────────────────────────────
 
 Element TuiApp::render_attention() {
-    // Prefer real captured attention; fall back to synthetic
-    AttentionMatrix* attn  = &synth_attn_;
+    // Use real captured attention when available, else fall back to synthetic.
+    AttentionMatrix real_copy;
+    AttentionMatrix* attn = &synth_attn_;
     std::vector<std::string>* toks = &synth_tokens_;
 
-    // TODO(integration): replace with hook_.latest_attention() once captured
-    // For now use the synthetic matrix constructed in the constructor.
+    if (hook_.has_real_attention()) {
+        real_copy = hook_.copy_attention();
+        attn = &real_copy;
+    }
 
     int nh   = attn->num_heads;
     int seq  = attn->seq_len;
@@ -429,13 +442,25 @@ bool TuiApp::on_event(Event e) {
     }
 
     switch (focus_) {
-        case 0:  // Topology — j/k to navigate
+        case 0:  // Topology — j/k navigate, Space to expand/collapse
             if (e == Event::Character('j') || e == Event::ArrowDown) {
                 topo_cursor_ = std::min((int)flat_.size() - 1, topo_cursor_ + 1);
                 return true;
             }
             if (e == Event::Character('k') || e == Event::ArrowUp) {
                 topo_cursor_ = std::max(0, topo_cursor_ - 1);
+                return true;
+            }
+            if (e == Event::Character(' ') || e == Event::Return) {
+                if (!flat_.empty() && topo_cursor_ < (int)flat_.size()) {
+                    const auto& fn = flat_[topo_cursor_];
+                    if (fn.has_children) {
+                        if (collapsed_.count(fn.full_name)) collapsed_.erase(fn.full_name);
+                        else                                 collapsed_.insert(fn.full_name);
+                        rebuild_tree();
+                        topo_cursor_ = std::min(topo_cursor_, (int)flat_.size() - 1);
+                    }
+                }
                 return true;
             }
             break;

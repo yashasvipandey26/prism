@@ -1,6 +1,6 @@
 #include "core/hook.h"
 #include "core/trace_io.h"
-#include "tui/app.h"
+//#include "tui/app.h"
 
 #include <llama.h>
 
